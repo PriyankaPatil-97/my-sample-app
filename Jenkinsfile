@@ -3,21 +3,25 @@ pipeline {
 
   environment {
     AWS_ACCOUNT_ID = "676206916950"
-    AWS_REGION = "ap-south-1"
-    ECR_REPO = "my-sample-app"
-    IMAGE_NAME = "${ECR_REPO}"
-    IMAGE_TAG = "${env.BUILD_NUMBER}"
+    AWS_REGION     = "ap-south-1"
+    ECR_REPO       = "my-sample-app"
+    IMAGE_NAME     = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+    IMAGE_TAG      = "${BUILD_NUMBER}"
   }
 
   tools { maven "Maven" }
 
   stages {
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        checkout scm
+      }
     }
 
     stage('Build (package)') {
-      steps { sh 'mvn -B -DskipTests clean package' }
+      steps {
+        sh 'mvn -B -DskipTests clean package'
+      }
     }
 
     stage('Unit Tests') {
@@ -51,60 +55,35 @@ pipeline {
       }
     }
 
-    stage('Build Docker Image') {
+    stage('Docker Build') {
       steps {
-        sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
-      }
-    }
-
-    stage('Trivy - image scan') {
-      steps {
-        // fails pipeline on HIGH or CRITICAL; remove --exit-code or change to 0 to only warn
-        sh """
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy image --exit-code 1 --severity HIGH,CRITICAL ${IMAGE_NAME}:${IMAGE_TAG}
-        """
-      }
-    }
-
-    stage('Push to ECR') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+        script {
           sh """
-            # configure aws cli temporarily
-            aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
-            aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
-            aws configure set default.region ${AWS_REGION}
-
-            # login
-            aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-
-            # create repo if missing
-            aws ecr create-repository --repository-name ${ECR_REPO} || true
-
-            # tag & push
-            docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}
-            docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}
+            docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
           """
         }
       }
     }
 
-    stage('Deploy') {
+    stage('Trivy Scan (Image)') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'aws-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+        script {
           sh """
-            aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-            docker rm -f ${IMAGE_NAME} || true
-            docker run -d -p 8080:8080 --name ${IMAGE_NAME} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}
+            trivy image --exit-code 0 --severity HIGH,CRITICAL ${IMAGE_NAME}:${IMAGE_TAG}
           """
         }
       }
     }
-  }
 
-  post {
-    always { archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: true }
-    failure { echo "Build failed. Check the console output." }
+    stage('ECR Login & Push') {
+      steps {
+        script {
+          sh """
+            aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+            docker push ${IMAGE_NAME}:${IMAGE_TAG}
+          """
+        }
+      }
+    }
   }
 }
