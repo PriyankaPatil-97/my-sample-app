@@ -7,6 +7,7 @@ pipeline {
     ECR_REPO       = "my-sample-app"
     IMAGE_NAME     = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
     IMAGE_TAG      = "${BUILD_NUMBER}"
+    APP_PORT       = "9090"   // <-- new port for the app
   }
 
   tools { maven "Maven" }
@@ -40,17 +41,18 @@ pipeline {
         }
       }
     }
-stage('Quality Gate') {
-  steps {
-    echo "Skipping Quality Gate check for now"
-  }
-}
+
+    stage('Quality Gate') {
+      steps {
+        echo "Skipping Quality Gate check for now"
+      }
+    }
 
     stage('Docker Build') {
       steps {
         script {
           sh """
-            docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+            docker build --build-arg APP_PORT=${APP_PORT} -t ${IMAGE_NAME}:${IMAGE_TAG} .
           """
         }
       }
